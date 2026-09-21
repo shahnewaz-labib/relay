@@ -20,14 +20,14 @@ import (
 	"sync"
 	"time"
 
-	"mole/internal/wire"
+	"relay/internal/wire"
 )
 
 var (
 	publicAddr = flag.String("public-addr", ":8080", "listen address for visitor traffic")
 	tunnelAddr = flag.String("tunnel-addr", ":7000", "listen address for tunnel connections")
 	authToken  = flag.String("auth-token", "", "token clients must present; empty = load "+
-		"from ~/.moled/token or generate one there automatically")
+		"from ~/.relayd/token or generate one there automatically")
 	rootDomain = flag.String("domain", "", "root domain for tunnels, e.g. example.com — "+
 		"visitors reach a tunnel at <name>.<domain>. Empty = match exact Host headers.")
 	catchAll = flag.String("default", "", "catch-all tunnel name: requests whose Host matches "+
@@ -46,7 +46,7 @@ var (
 	publicKey  = flag.String("public-key", "", "TLS private key for the public port")
 )
 
-// authMsg / authAck mirror the structs in cmd/mole (kept tiny on purpose).
+// authMsg / authAck mirror the structs in cmd/relay (kept tiny on purpose).
 type authMsg struct {
 	Name  string `json:"name"`
 	Token string `json:"token"`
@@ -179,7 +179,7 @@ func main() {
 		}
 		tunLn = tls.NewListener(tunLn, &tls.Config{
 			Certificates: []tls.Certificate{cert},
-			NextProtos:   []string{"mole/1"},
+			NextProtos:   []string{"relay/1"},
 		})
 		log.Print("tunnel door speaks TLS")
 	}
@@ -199,7 +199,7 @@ func main() {
 	if *publicCert != "" {
 		scheme = "HTTPS"
 	}
-	log.Printf("moled up: visitors %s (%s) · tunnels %s · domain %q · catch-all %q",
+	log.Printf("relayd up: visitors %s (%s) · tunnels %s · domain %q · catch-all %q",
 		*publicAddr, scheme, *tunnelAddr, *rootDomain, *catchAll)
 	if *publicCert != "" {
 		log.Fatal(srv.ListenAndServeTLS(*publicCert, *publicKey))
@@ -389,11 +389,11 @@ func tokenFilePath() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".moled", "token"), nil
+	return filepath.Join(home, ".relayd", "token"), nil
 }
 
 // resolveAuthToken determines the relay's shared secret, in order of
-// preference: --auth-token flag > ~/.moled/token > generate & persist.
+// preference: --auth-token flag > ~/.relayd/token > generate & persist.
 // The second return value records where the token came from.
 func resolveAuthToken() (string, string) {
 	if *authToken != "" {
@@ -489,20 +489,20 @@ func printConnectHint(token, source string, mappedPorts map[string]string, alloc
 	b.WriteString("\nClients can connect with:\n\n")
 	if alloc != nil {
 		fmt.Fprintf(&b,
-			"    mole --relay=%s:%s --token=%s --name=anything-you-like --local=localhost:<port>\n\n"+
+			"    relay --relay=%s:%s --token=%s --name=anything-you-like --local=localhost:<port>\n\n"+
 				"Each new name gets the next free port in %d-%d automatically;\n"+
 				"the client prints the visitor URL when it connects.\n\n",
 			host, relayPort, tok, alloc.start, alloc.end)
 	}
 	if len(names) == 0 && alloc == nil {
 		fmt.Fprintf(&b,
-			"    mole --relay=%s:%s --token=%s --name=pick-a-name --local=localhost:<port>\n"+
+			"    relay --relay=%s:%s --token=%s --name=pick-a-name --local=localhost:<port>\n"+
 				"    # (--name matters when --domain / --default / --port-map is used)\n",
 			host, relayPort, tok)
 	} else {
 		for _, n := range names {
 			fmt.Fprintf(&b,
-				"    mole --relay=%s:%s --token=%s --name=%s --local=localhost:<port>\n",
+				"    relay --relay=%s:%s --token=%s --name=%s --local=localhost:<port>\n",
 				host, relayPort, tok, n)
 			fmt.Fprintf(&b, "        -> visitors open http://%s%s\n", host, mappedPorts[n])
 		}

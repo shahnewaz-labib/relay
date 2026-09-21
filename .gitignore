@@ -1,4 +1,6 @@
 /moled
 /mole
+/relayd
+/relay
 /dist/
 *.test

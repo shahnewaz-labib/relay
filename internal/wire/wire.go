@@ -1,5 +1,5 @@
 // Package wire implements a tiny stream-multiplexing protocol over a single
-// net.Conn. It exists so mole can serve many visitors concurrently over ONE
+// net.Conn. It exists so relay can serve many visitors concurrently over ONE
 // outbound tunnel connection, instead of burning one parked TCP connection
 // per visitor.
 //
@@ -10,12 +10,12 @@
 //
 // Frame types:
 //
-//	Syn      open stream with this ID (sent by the opener, conventionally moled)
+//	Syn      open stream with this ID (sent by the opener, conventionally relayd)
 //	Data     payload bytes belonging to stream ID
 //	Fin      sender will send nothing more on stream ID
 //	Ping     keepalive probe (answered automatically with Pong)
 //	Pong     reply to Ping
-//	Auth     control frame (payload opaque to wire — used by mole/moled)
+//	Auth     control frame (payload opaque to wire — used by relay/relayd)
 //	AuthAck  control ack
 //	Reject   control rejection (payload is a human-readable reason)
 //	Dead     internal only: emitted as an Event when the underlying conn dies
@@ -93,7 +93,7 @@ type Conn struct {
 	kaTimeout  time.Duration // ...and die if nothing arrives for this long
 }
 
-// Keepalive defaults used by both mole binaries.
+// Keepalive defaults used by both relay binaries.
 const (
 	PingInterval = 10 * time.Second // send Ping this often
 	PingTimeout  = 30 * time.Second // die if no frame arrives for this long

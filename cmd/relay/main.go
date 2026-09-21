@@ -1,7 +1,7 @@
-// Command mole is the client half: run it NEXT TO your local service, on the
+// Command relay is the client half: run it NEXT TO your local service, on the
 // machine WITHOUT a public address.
 //
-// It dials OUT to moled, authenticates with a token under a chosen name
+// It dials OUT to relayd, authenticates with a token under a chosen name
 // (becoming e.g. alice.example.com), then binds every incoming stream to a
 // fresh connection to the local service.
 package main
@@ -21,14 +21,14 @@ import (
 	"strings"
 	"time"
 
-	"mole/internal/wire"
+	"relay/internal/wire"
 )
 
 var (
-	relay     = flag.String("relay", "localhost:7000", "address of moled's tunnel port (host:port)")
+	relay     = flag.String("relay", "localhost:7000", "address of relayd's tunnel port (host:port)")
 	localAddr = flag.String("local", "localhost:8000", "local service to expose")
 	name      = flag.String("name", "", "tunnel name (default: this machine's hostname)")
-	token     = flag.String("token", "", "auth token expected by moled (required)")
+	token     = flag.String("token", "", "auth token expected by relayd (required)")
 	retryWait = flag.Duration("retry-wait", 2*time.Second, "pause between relay dial attempts")
 
 	useTLS  = flag.Bool("tls", false, "dial the relay over TLS")
@@ -36,7 +36,7 @@ var (
 	tlsName = flag.String("tls-name", "", "server name for TLS verification (default: host part of --relay)")
 )
 
-// authMsg / authAck mirror the structs in cmd/moled.
+// authMsg / authAck mirror the structs in cmd/relayd.
 type authMsg struct {
 	Name  string `json:"name"`
 	Token string `json:"token"`
@@ -52,11 +52,11 @@ type authAckMsg struct {
 func main() {
 	flag.Parse()
 	if *token == "" {
-		*token = os.Getenv("MOLE_TOKEN")
+		*token = os.Getenv("RELAY_TOKEN")
 	}
 	if *token == "" {
-		log.Fatal("no token: pass --token or set MOLE_TOKEN " +
-			"(copy the connect command printed by moled on your VPS)")
+		log.Fatal("no token: pass --token or set RELAY_TOKEN " +
+			"(copy the connect command printed by relayd on your VPS)")
 	}
 	if *name == "" {
 		h, err := os.Hostname()
@@ -167,7 +167,7 @@ func dialRelay() (net.Conn, error) {
 	if sni == "" {
 		sni = host
 	}
-	cfg := &tls.Config{ServerName: sni, NextProtos: []string{"mole/1"}}
+	cfg := &tls.Config{ServerName: sni, NextProtos: []string{"relay/1"}}
 	if *caFile != "" {
 		pemBytes, err := os.ReadFile(*caFile)
 		if err != nil {

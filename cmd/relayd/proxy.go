@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 
-	"mole/internal/wire"
+	"relay/internal/wire"
 )
 
 // beKey carries the chosen backend connection through the request context
@@ -21,7 +21,7 @@ func httputilProxy(be *wire.Conn) http.Handler {
 	return &httputil.ReverseProxy{
 		Director: func(req *http.Request) {
 			req.URL.Scheme = "http"
-			req.URL.Host = "mole.origin" // placeholder; real dialing goes over the tunnel
+			req.URL.Host = "relay.origin" // placeholder; real dialing goes over the tunnel
 			*req = *req.WithContext(context.WithValue(req.Context(), beKey{}, be))
 		},
 		Transport: &http.Transport{

@@ -14,10 +14,10 @@ import (
 // Sources of truth, in order:
 //  1. static --port-map entries (operator-pinned: always listening, never
 //     deactivated)
-//  2. previously assigned ranges persisted in portsFile (~/.moled/ports.json)
+//  2. previously assigned ranges persisted in portsFile (~/.relayd/ports.json)
 //  3. fresh picks from the configured range, lowest-first
 //
-// Persisting matters: without it, a moled restart could hand a different
+// Persisting matters: without it, a relayd restart could hand a different
 // port to an existing tunnel name and silently break everyone's bookmarks.
 //
 // Lifecycle: a dynamic port's listener starts when its tunnel first (or
