@@ -4,6 +4,10 @@
   "main": "src/index.js",
   "compatibility_date": "2026-09-01",
 
+  // Not a secret. Pinning it means CI needs only CLOUDFLARE_API_TOKEN, and a
+  // token with access to several accounts cannot pick the wrong one.
+  "account_id": "612b695d2a20f2d6e4a59d213577a2f9",
+
   // SQLite-backed classes are the only kind available on the Workers Free
   // plan. Relay keeps no persistent state, but the class type still matters.
   "durable_objects": {

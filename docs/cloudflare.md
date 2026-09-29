@@ -159,12 +159,19 @@ Two workflows in `.github/workflows/`:
 
 ### One-time setup
 
-Add a repository secret named `CLOUDFLARE_API_TOKEN`:
+Add one repository secret, `CLOUDFLARE_API_TOKEN`:
 
-1. https://dash.cloudflare.com/profile/api-tokens → Create Token
-2. Use the **Edit Cloudflare Workers** template
-3. Scope it to the zone serving your tunnels
-4. GitHub → Settings → Secrets and variables → Actions → New repository secret
+1. https://dash.cloudflare.com/profile/api-tokens → **Create Token**
+2. Under **Permission policies**, open the **Custom** dropdown and choose the
+   **Edit Cloudflare Workers** template
+3. Scope **Account Resources** to the account holding the Worker, and **Zone
+   Resources** to the zone serving your tunnels
+4. Create, then copy the token — the dashboard shows it exactly once
+5. GitHub → Settings → Secrets and variables → Actions → **New repository
+   secret**, named `CLOUDFLARE_API_TOKEN`
+
+Cloudflare's guide also asks for `CLOUDFLARE_ACCOUNT_ID`. That is unnecessary
+here: `account_id` is pinned in `wrangler.jsonc`, since it is not a secret.
 
 ### What CD does not touch
 
