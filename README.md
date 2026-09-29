@@ -343,17 +343,19 @@ The client side wants the same treatment (`Restart=always`, `--tls --ca`).
 
 ## Roadmap
 
-### Next: optional Cloudflare backend
+### Optional Cloudflare backend — usable, see [docs/cloudflare.md](docs/cloudflare.md)
 
-- [ ] Worker routing for tunnel subdomains on your own domain
-- [ ] SQLite-backed Durable Object per tunnel, using WebSocket hibernation
+- [x] Worker routing for tunnel subdomains on your own domain
+- [x] SQLite-backed Durable Object, hibernation-capable, holding every tunnel
 - [x] Encrypted WebSocket transport in the Go client
-- [ ] Streaming requests and responses with backpressure and cancellation
-- [x] WebSocket forwarding for development-server hot reload (VPS integration tested)
+- [x] HTTP/1.1 bridge in the Worker, so the Go client needs no changes
+- [x] `wrangler deploy` as the whole deployment step
+- [x] Streaming response bodies (content-length and chunked)
+- [x] WebSocket forwarding for development-server hot reload (VPS backend only)
 - [x] `relay <port>` with generated names and saved connection settings
 - [x] DNS/TLS reachability check and structured JSON output
-- [ ] Worker-compatible HTTP bridge or versioned HTTP-aware protocol
-- [ ] One-command Workers/DO deployment setup
+- [ ] Visitor WebSocket upgrades on the Cloudflare backend (501 today)
+- [ ] Streaming request bodies and backpressure (buffered, 25 MB cap today)
 - [ ] Measure free-tier usage with real development traffic
 
 ### Completed: self-hosted Go backend

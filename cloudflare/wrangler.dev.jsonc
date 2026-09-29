@@ -1,0 +1,19 @@
+// Local-testing config. Identical to wrangler.jsonc but with no "routes":
+// `wrangler dev` rewrites the request Host to match a configured route, which
+// would defeat the hostname routing this Worker is built on. Without routes it
+// passes the real Host through, so `Host: demo.localhost` reaches the tunnel
+// named "demo".
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "relay-dev",
+  "main": "src/index.js",
+  "compatibility_date": "2026-09-01",
+  "durable_objects": {
+    "bindings": [{ "name": "HUB", "class_name": "TunnelHub" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["TunnelHub"] }],
+  "vars": {
+    "CONTROL_HOST": "localhost",
+    "TUNNEL_SUFFIX": "localhost"
+  }
+}
