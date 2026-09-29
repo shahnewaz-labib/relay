@@ -1,0 +1,25 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "relay",
+  "main": "src/index.js",
+  "compatibility_date": "2026-09-01",
+
+  // SQLite-backed classes are the only kind available on the Workers Free
+  // plan. Relay keeps no persistent state, but the class type still matters.
+  "durable_objects": {
+    "bindings": [{ "name": "HUB", "class_name": "TunnelHub" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["TunnelHub"] }],
+
+  // Tunnels must sit ONE level below the zone apex. Universal SSL does not
+  // cover deeper wildcards, so "demo.tunnels.example.com" would need paid
+  // Advanced Certificate Manager, while "demo.example.com" is free.
+  "vars": {
+    "CONTROL_HOST": "relay.tnnnnnnnl.xyz",
+    "TUNNEL_SUFFIX": "tnnnnnnnl.xyz"
+  },
+
+  // One wildcard route covers both the control host and every tunnel.
+  // Requires a proxied wildcard DNS record on the zone.
+  "routes": [{ "pattern": "*.tnnnnnnnl.xyz/*", "zone_name": "tnnnnnnnl.xyz" }]
+}

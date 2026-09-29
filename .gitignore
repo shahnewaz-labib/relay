@@ -4,3 +4,6 @@
 /relay
 /dist/
 *.test
+node_modules/
+.wrangler/
+.dev.vars
