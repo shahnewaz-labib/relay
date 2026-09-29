@@ -105,9 +105,15 @@ export function serializeRequest(method, url, headers, host, bodyLength) {
   const lines = [`${method} ${url.pathname}${url.search} HTTP/1.1`];
   lines.push(`Host: ${host}`);
   for (const [name, value] of headers) {
-    if (HOP_BY_HOP.has(name.toLowerCase()) || name.toLowerCase() === "host") continue;
+    const lower = name.toLowerCase();
+    if (HOP_BY_HOP.has(lower) || lower === "host" || lower === "accept-encoding") continue;
     lines.push(`${name}: ${value}`);
   }
+  // Ask the origin not to compress. The Workers runtime treats a constructed
+  // Response body as already decoded, so a compressed one gets re-compressed
+  // and its Content-Encoding overwritten — the visitor then renders raw gzip.
+  // Cloudflare still compresses at the edge, so nothing is lost on the wire.
+  lines.push("Accept-Encoding: identity");
   // The stream is closed by Fin only when the visitor aborts, so the origin
   // needs an explicit length to know the request ended.
   lines.push(`Content-Length: ${bodyLength}`);
@@ -138,6 +144,7 @@ export function parseResponseHead(buf) {
   const headers = new Headers();
   let contentLength = null;
   let chunked = false;
+  let contentEncoding = "";
   for (const line of rawHeaders) {
     const colon = line.indexOf(":");
     if (colon < 0) continue;
@@ -146,6 +153,12 @@ export function parseResponseHead(buf) {
     const lower = name.toLowerCase();
     if (lower === "content-length") contentLength = Number(value);
     if (lower === "transfer-encoding" && value.toLowerCase().includes("chunked")) chunked = true;
+    if (lower === "content-encoding") {
+      // Never forwarded: the caller hands the runtime an identity body, and a
+      // stale Content-Encoding here makes the edge mislabel the response.
+      contentEncoding = value.toLowerCase();
+      continue;
+    }
     if (HOP_BY_HOP.has(lower)) continue;
     headers.append(name, value); // append keeps repeated Set-Cookie intact
   }
@@ -157,6 +170,7 @@ export function parseResponseHead(buf) {
     statusText: match[2] ?? "",
     headers,
     chunked,
+    contentEncoding,
     contentLength: bodyless ? 0 : contentLength,
     rest: buf.subarray(end + 4),
   };

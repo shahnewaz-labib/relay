@@ -265,7 +265,22 @@ export class TunnelHub {
     const timer = setTimeout(() => pending.fail(new Error("origin timed out")), 30_000);
     try {
       const head = await pending.headReady;
-      return new Response(head.status === 204 || head.status === 304 ? null : pending.body, {
+      if (head.status === 204 || head.status === 304) {
+        return new Response(null, {
+          status: head.status,
+          statusText: head.statusText,
+          headers: head.headers,
+        });
+      }
+      // We asked the origin for identity, but some ignore that. Decode here
+      // rather than hand the runtime a compressed body it will mislabel.
+      let body = pending.body;
+      const codec = { gzip: "gzip", "x-gzip": "gzip", deflate: "deflate" }[head.contentEncoding];
+      if (codec) {
+        body = body.pipeThrough(new DecompressionStream(codec));
+        head.headers.delete("content-length"); // no longer the decoded length
+      }
+      return new Response(body, {
         status: head.status,
         statusText: head.statusText,
         headers: head.headers,
