@@ -147,3 +147,39 @@ Checked against the real Go client through `wrangler dev`:
 | WebSocket upgrade (Next.js HMR) | 101, messages both ways |
 | 8 concurrent 500 KB GETs | all byte-exact |
 | 6 concurrent POST echoes | all byte-identical |
+
+## Continuous deployment
+
+Two workflows in `.github/workflows/`:
+
+| Workflow | Trigger | Does |
+| --- | --- | --- |
+| `ci.yml` | push to master, any PR | gofmt, `go vet`, `go build`, `go test -race`, Worker unit tests, `wrangler deploy --dry-run` |
+| `deploy.yml` | push to master touching `cloudflare/**` | `npm test`, then `wrangler deploy`, then a health probe |
+
+### One-time setup
+
+Add a repository secret named `CLOUDFLARE_API_TOKEN`:
+
+1. https://dash.cloudflare.com/profile/api-tokens → Create Token
+2. Use the **Edit Cloudflare Workers** template
+3. Scope it to the zone serving your tunnels
+4. GitHub → Settings → Secrets and variables → Actions → New repository secret
+
+### What CD does not touch
+
+`RELAY_TOKEN` is a Worker secret, set once with `wrangler secret put`. Deploys
+never rotate it. If a deploy reset it, every enrolled client would be locked
+out until it ran `relay setup` again.
+
+The health probe expects **401** from `/_relay/check`. That is the correct
+answer to an unauthenticated request, and it proves the route is live and the
+Worker is running without putting a token in CI.
+
+### Known skipped test
+
+`TestWebSocketTunnelHTTPAndUpgrade` in `cmd/relayd` is skipped by default. It
+fails about 13 runs in 15: concurrent large bodies truncate on the VPS
+backend. Run it with `RELAY_FLAKY=1 go test ./cmd/relayd/`. The Cloudflare
+backend passes the same workload, so the defect is in relayd, not the
+protocol.
