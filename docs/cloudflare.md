@@ -114,10 +114,9 @@ state; only the class type matters.
 
 ## What this backend does not do yet
 
-- **Visitor WebSocket upgrades.** Requests carrying `Upgrade:` get a 501.
-  The origin speaks raw WebSocket frames over the tunnel, so relaying them
-  means re-encoding RFC 6455 framing inside the Worker. Hot module reload
-  needs the VPS backend for now.
+- **WebSocket extensions.** The upgrade request never offers
+  `permessage-deflate`, because the bridge does not implement per-frame
+  compression. Subprotocols are forwarded.
 - **Streaming request bodies.** The request body is buffered to give the
   origin a `Content-Length`. Bodies over 25 MB get a 413.
 - **Compression on the tunnel leg.** The Worker asks the origin for
@@ -145,6 +144,6 @@ Checked against the real Go client through `wrangler dev`:
 | Repeated `Set-Cookie` headers | both preserved |
 | POST body round-trip | byte-identical |
 | Unknown tunnel name | 404 |
-| `Upgrade:` request | 501, as designed |
+| WebSocket upgrade (Next.js HMR) | 101, messages both ways |
 | 8 concurrent 500 KB GETs | all byte-exact |
 | 6 concurrent POST echoes | all byte-identical |

@@ -7,8 +7,12 @@ import {
   T,
   encodeData,
   encodeFrame,
+  WS_OP,
+  WsFrameDecoder,
+  encodeWsFrame,
   parseResponseHead,
   serializeRequest,
+  serializeUpgradeRequest,
 } from "../src/protocol.js";
 
 const bytes = (s) => new TextEncoder().encode(s);
@@ -122,4 +126,61 @@ test("strips Content-Encoding from the response and reports it separately", () =
   );
   assert.equal(head.contentEncoding, "gzip");
   assert.equal(head.headers.get("content-encoding"), null);
+});
+
+test("masks outgoing websocket frames and round-trips through the decoder", () => {
+  const payload = bytes("hot reload");
+  const frame = encodeWsFrame(WS_OP.text, payload);
+  assert.equal(frame[0], 0x80 | WS_OP.text, "FIN set, text opcode");
+  assert.ok(frame[1] & 0x80, "client frames must be masked");
+  assert.notDeepEqual(frame.subarray(6), payload, "payload must not be sent in the clear");
+
+  // Decode it back by clearing the mask bit path: the decoder unmasks for us.
+  const decoded = new WsFrameDecoder().push(frame);
+  assert.equal(decoded.length, 1);
+  assert.equal(text(decoded[0].payload), "hot reload");
+  assert.equal(decoded[0].opcode, WS_OP.text);
+  assert.equal(decoded[0].fin, true);
+});
+
+test("decodes each websocket payload length form", () => {
+  for (const size of [10, 200, 70000]) {
+    const payload = new Uint8Array(size).fill(65);
+    const frames = new WsFrameDecoder().push(encodeWsFrame(WS_OP.binary, payload));
+    assert.equal(frames.length, 1, `size ${size}`);
+    assert.equal(frames[0].payload.length, size, `size ${size}`);
+  }
+});
+
+test("reassembles fragmented frames and splits frames across chunks", () => {
+  // Unmasked server->client frames, fragmented: "Wiki" + "pedia"
+  const a = new Uint8Array([0x01, 0x04, ...bytes("Wiki")]); // text, FIN=0
+  const b = new Uint8Array([0x80, 0x05, ...bytes("pedia")]); // cont, FIN=1
+  const decoder = new WsFrameDecoder();
+  const stream = new Uint8Array([...a, ...b]);
+  const out = [];
+  for (const byte of stream) out.push(...decoder.push(new Uint8Array([byte])));
+  assert.equal(out.length, 2);
+  assert.equal(out[0].fin, false);
+  assert.equal(text(out[0].payload), "Wiki");
+  assert.equal(out[1].opcode, WS_OP.cont);
+  assert.equal(text(out[1].payload), "pedia");
+});
+
+test("builds an upgrade request without extensions", () => {
+  const url = new URL("https://demo.example.com/_next/webpack-hmr");
+  const headers = new Headers({
+    "sec-websocket-extensions": "permessage-deflate",
+    "sec-websocket-protocol": "hmr",
+    "sec-websocket-key": "visitorkey",
+    origin: "https://demo.example.com",
+  });
+  const out = text(serializeUpgradeRequest(url, headers, "demo.example.com", "ABC123"));
+  assert.match(out, /^GET \/_next\/webpack-hmr HTTP\/1\.1\r\n/);
+  assert.match(out, /\r\nUpgrade: websocket\r\n/);
+  assert.match(out, /\r\nSec-WebSocket-Key: ABC123\r\n/);
+  assert.match(out, /\r\nsec-websocket-protocol: hmr\r\n/i);
+  assert.match(out, /\r\norigin: https:\/\/demo\.example\.com\r\n/i);
+  assert.doesNotMatch(out, /permessage-deflate/, "extensions must not be offered");
+  assert.doesNotMatch(out, /visitorkey/, "the visitor's key must not be reused");
 });

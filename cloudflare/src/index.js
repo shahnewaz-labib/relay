@@ -10,10 +10,16 @@ import {
   PONG_BYTES,
   T,
   VERSION,
+  WS_OP,
+  WsFrameDecoder,
+  concatBytes,
   encodeData,
   encodeFrame,
+  encodeWsFrame,
   parseResponseHead,
   serializeRequest,
+  serializeUpgradeRequest,
+  websocketKey,
 } from "./protocol.js";
 
 const CONNECT_PATH = "/_relay/connect";
@@ -227,18 +233,145 @@ export class TunnelHub {
     this.drop(ws, 1011, "error");
   }
 
+  // Bridges a visitor WebSocket to the origin's. The visitor half is handled
+  // by the runtime as decoded messages; the origin half is raw RFC 6455 over
+  // the tunnel, so this translates between the two.
+  async serveWebSocket(request, url, host, tunnelWs) {
+    const st = this.stateFor(tunnelWs);
+    const id = st.nextId++;
+    const pending = newWsPending();
+    st.pending.set(id, pending);
+
+    try {
+      tunnelWs.send(encodeFrame(T.Syn, id, null));
+      const head = serializeUpgradeRequest(url, request.headers, host, websocketKey());
+      for (const frame of encodeData(id, head)) tunnelWs.send(frame);
+    } catch (err) {
+      st.pending.delete(id);
+      return errorPage(502, `Tunnel write failed: ${err}`);
+    }
+
+    const timer = setTimeout(() => pending.fail(new Error("origin timed out")), 15_000);
+    let head;
+    try {
+      head = await pending.headReady;
+    } catch (err) {
+      st.pending.delete(id);
+      return errorPage(502, `WebSocket upgrade failed: ${err.message}`);
+    } finally {
+      clearTimeout(timer);
+    }
+    if (head.status !== 101) {
+      st.pending.delete(id);
+      return errorPage(502, `The origin refused the WebSocket upgrade (status ${head.status}).`);
+    }
+
+    const [client, server] = Object.values(new WebSocketPair());
+    server.accept();
+
+    const toOrigin = (opcode, payload) => {
+      try {
+        for (const frame of encodeData(id, encodeWsFrame(opcode, payload))) tunnelWs.send(frame);
+      } catch {
+        // tunnel gone; the close handler tidies up
+      }
+    };
+
+    const decoder = new WsFrameDecoder();
+    let fragmentOp = 0;
+    let fragments = [];
+
+    pending.setSink((bytes) => {
+      let frames;
+      try {
+        frames = decoder.push(bytes);
+      } catch {
+        try {
+          server.close(1002, "bad frame from origin");
+        } catch {
+          // already closed
+        }
+        return;
+      }
+      for (const frame of frames) {
+        if (frame.opcode === WS_OP.close) {
+          try {
+            server.close(1000, "");
+          } catch {
+            // already closed
+          }
+          return;
+        }
+        if (frame.opcode === WS_OP.ping) {
+          toOrigin(WS_OP.pong, frame.payload);
+          continue;
+        }
+        if (frame.opcode === WS_OP.pong) continue;
+
+        let opcode = frame.opcode;
+        let payload = frame.payload;
+        if (opcode === WS_OP.cont) {
+          fragments.push(payload);
+          if (!frame.fin) continue;
+          payload = concatBytes(fragments);
+          opcode = fragmentOp;
+          fragments = [];
+        } else if (!frame.fin) {
+          fragmentOp = opcode;
+          fragments = [payload];
+          continue;
+        }
+        try {
+          server.send(opcode === WS_OP.text ? new TextDecoder().decode(payload) : payload);
+        } catch {
+          // visitor went away
+        }
+      }
+    });
+
+    pending.onClose = () => {
+      try {
+        server.close(1001, "tunnel closed");
+      } catch {
+        // already closed
+      }
+    };
+
+    server.addEventListener("message", (event) => {
+      if (typeof event.data === "string") {
+        toOrigin(WS_OP.text, new TextEncoder().encode(event.data));
+      } else {
+        toOrigin(WS_OP.binary, new Uint8Array(event.data));
+      }
+    });
+
+    const teardown = () => {
+      toOrigin(WS_OP.close, new Uint8Array(0));
+      try {
+        tunnelWs.send(encodeFrame(T.Fin, id, null));
+      } catch {
+        // tunnel already gone
+      }
+      st.pending.delete(id);
+    };
+    server.addEventListener("close", teardown);
+    server.addEventListener("error", teardown);
+
+    const headers = new Headers();
+    const subprotocol = head.headers.get("sec-websocket-protocol");
+    if (subprotocol) headers.set("sec-websocket-protocol", subprotocol);
+    return new Response(null, { status: 101, webSocket: client, headers });
+  }
+
   // ---- visitor side ----
 
   async serveVisitor(request, url, host, name) {
-    // ponytail: visitor WebSocket upgrades are not bridged yet. The origin
-    // speaks raw WebSocket frames over the tunnel; relaying them means
-    // re-encoding RFC 6455 framing in the Worker. HMR needs the VPS backend.
-    if (request.headers.get("upgrade")) {
-      return errorPage(501, "This backend does not forward WebSocket upgrades yet.");
-    }
-
     const ws = this.lookup(name);
     if (!ws) return errorPage(404, `No tunnel named "${name}" is connected.`);
+
+    if (request.headers.get("upgrade")?.toLowerCase() === "websocket") {
+      return this.serveWebSocket(request, url, host, ws);
+    }
 
     // ponytail: the request body is buffered so the origin gets a
     // Content-Length. Switch to chunked transfer if large uploads matter.
@@ -300,6 +433,73 @@ export class TunnelHub {
       });
     }
   }
+}
+
+// newWsPending is the upgrade-shaped counterpart to newPending: it resolves
+// once the origin's 101 head has been parsed, then hands every later byte to
+// a raw sink instead of an HTTP body stream.
+function newWsPending() {
+  let resolveHead, rejectHead;
+  const headReady = new Promise((res, rej) => {
+    resolveHead = res;
+    rejectHead = rej;
+  });
+
+  const state = {
+    headReady,
+    head: null,
+    buf: new Uint8Array(0),
+    sink: null,
+    queued: [],
+    onClose: null,
+    finished: false,
+
+    // The first frames often arrive in the same message as the 101 head, so
+    // bytes are queued until the caller has installed its sink.
+    setSink(fn) {
+      state.sink = fn;
+      for (const chunk of state.queued) fn(chunk);
+      state.queued = [];
+    },
+
+    onBytes(bytes) {
+      if (state.head) {
+        if (state.sink) state.sink(bytes);
+        else state.queued.push(bytes);
+        return;
+      }
+      const merged = new Uint8Array(state.buf.length + bytes.length);
+      merged.set(state.buf);
+      merged.set(bytes, state.buf.length);
+      state.buf = merged;
+      let head;
+      try {
+        head = parseResponseHead(state.buf);
+      } catch (err) {
+        return state.fail(err);
+      }
+      if (!head) return;
+      state.head = head;
+      state.buf = new Uint8Array(0);
+      resolveHead(head);
+      if (head.rest.length) state.onBytes(head.rest);
+    },
+
+    onEnd() {
+      if (state.finished) return;
+      state.finished = true;
+      if (!state.head) rejectHead(new Error("tunnel closed before the upgrade completed"));
+      else state.onClose?.();
+    },
+
+    fail(err) {
+      if (state.finished) return;
+      state.finished = true;
+      if (!state.head) rejectHead(err);
+      else state.onClose?.();
+    },
+  };
+  return state;
 }
 
 // newPending tracks one visitor request: a promise for the response head and a

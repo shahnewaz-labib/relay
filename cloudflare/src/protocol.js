@@ -237,3 +237,139 @@ function findCRLF(buf) {
   }
   return -1;
 }
+
+// ---- RFC 6455 framing ----
+//
+// The origin speaks raw WebSocket frames over the tunnel, but a Worker's
+// WebSocketPair hands us decoded messages. Bridging the two means doing the
+// framing here. We are the CLIENT toward the origin, so frames we send are
+// masked and frames we receive are not.
+
+export const WS_OP = { cont: 0x0, text: 0x1, binary: 0x2, close: 0x8, ping: 0x9, pong: 0xa };
+
+export function websocketKey() {
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return btoa(String.fromCharCode(...bytes));
+}
+
+export function serializeUpgradeRequest(url, headers, host, key) {
+  const lines = [
+    `GET ${url.pathname}${url.search} HTTP/1.1`,
+    `Host: ${host}`,
+    "Upgrade: websocket",
+    "Connection: Upgrade",
+    "Sec-WebSocket-Version: 13",
+    `Sec-WebSocket-Key: ${key}`,
+  ];
+  for (const [name, value] of headers) {
+    const lower = name.toLowerCase();
+    if (HOP_BY_HOP.has(lower) || lower === "host" || lower === "accept-encoding") continue;
+    // Forward the subprotocol only. Offering extensions such as
+    // permessage-deflate would oblige us to implement frame compression.
+    if (lower.startsWith("sec-websocket-") && lower !== "sec-websocket-protocol") continue;
+    lines.push(`${name}: ${value}`);
+  }
+  return encoder.encode(lines.join("\r\n") + "\r\n\r\n");
+}
+
+export function encodeWsFrame(opcode, payload) {
+  const len = payload.length;
+  let headerLen;
+  let header;
+  if (len < 126) {
+    header = new Uint8Array(6);
+    header[1] = 0x80 | len;
+    headerLen = 2;
+  } else if (len < 65536) {
+    header = new Uint8Array(8);
+    header[1] = 0x80 | 126;
+    new DataView(header.buffer).setUint16(2, len);
+    headerLen = 4;
+  } else {
+    header = new Uint8Array(14);
+    header[1] = 0x80 | 127;
+    new DataView(header.buffer).setBigUint64(2, BigInt(len));
+    headerLen = 10;
+  }
+  header[0] = 0x80 | opcode; // FIN set: we never fragment outbound
+  const mask = new Uint8Array(4);
+  crypto.getRandomValues(mask);
+  header.set(mask, headerLen);
+
+  const out = new Uint8Array(headerLen + 4 + len);
+  out.set(header.subarray(0, headerLen + 4));
+  for (let i = 0; i < len; i++) out[headerLen + 4 + i] = payload[i] ^ mask[i & 3];
+  return out;
+}
+
+export class WsFrameDecoder {
+  constructor() {
+    this.buf = new Uint8Array(0);
+  }
+
+  push(bytes) {
+    if (this.buf.length === 0) {
+      this.buf = bytes;
+    } else {
+      const merged = new Uint8Array(this.buf.length + bytes.length);
+      merged.set(this.buf);
+      merged.set(bytes, this.buf.length);
+      this.buf = merged;
+    }
+
+    const frames = [];
+    let off = 0;
+    for (;;) {
+      if (this.buf.length - off < 2) break;
+      const b0 = this.buf[off];
+      const b1 = this.buf[off + 1];
+      const fin = (b0 & 0x80) !== 0;
+      const opcode = b0 & 0x0f;
+      const masked = (b1 & 0x80) !== 0;
+      let len = b1 & 0x7f;
+      let p = off + 2;
+
+      if (len === 126) {
+        if (this.buf.length - p < 2) break;
+        len = (this.buf[p] << 8) | this.buf[p + 1];
+        p += 2;
+      } else if (len === 127) {
+        if (this.buf.length - p < 8) break;
+        const big = new DataView(this.buf.buffer, this.buf.byteOffset + p, 8).getBigUint64(0);
+        if (big > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error("relay: ws frame too large");
+        len = Number(big);
+        p += 8;
+      }
+
+      let maskKey = null;
+      if (masked) {
+        if (this.buf.length - p < 4) break;
+        maskKey = this.buf.subarray(p, p + 4);
+        p += 4;
+      }
+      if (this.buf.length - p < len) break;
+
+      const payload = this.buf.slice(p, p + len);
+      if (maskKey) {
+        for (let i = 0; i < len; i++) payload[i] ^= maskKey[i & 3];
+      }
+      frames.push({ fin, opcode, payload });
+      off = p + len;
+    }
+    this.buf = off === 0 ? this.buf : this.buf.subarray(off);
+    return frames;
+  }
+}
+
+export function concatBytes(parts) {
+  let total = 0;
+  for (const part of parts) total += part.length;
+  const out = new Uint8Array(total);
+  let off = 0;
+  for (const part of parts) {
+    out.set(part, off);
+    off += part.length;
+  }
+  return out;
+}

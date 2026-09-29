@@ -351,10 +351,10 @@ The client side wants the same treatment (`Restart=always`, `--tls --ca`).
 - [x] HTTP/1.1 bridge in the Worker, so the Go client needs no changes
 - [x] `wrangler deploy` as the whole deployment step
 - [x] Streaming response bodies (content-length and chunked)
-- [x] WebSocket forwarding for development-server hot reload (VPS backend only)
+- [x] WebSocket forwarding for development-server hot reload (both backends)
 - [x] `relay <port>` with generated names and saved connection settings
 - [x] DNS/TLS reachability check and structured JSON output
-- [ ] Visitor WebSocket upgrades on the Cloudflare backend (501 today)
+- [x] Visitor WebSocket upgrades on the Cloudflare backend (RFC 6455 bridge)
 - [ ] Streaming request bodies and backpressure (buffered, 25 MB cap today)
 - [ ] Measure free-tier usage with real development traffic
 
