@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/rand"
+	"crypto/subtle"
 	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
@@ -13,13 +14,13 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"relay/internal/protocol"
 	"relay/internal/wire"
 )
 
@@ -38,27 +39,22 @@ var (
 		"tunnel name that connects gets the next free port automatically, persisted across restarts")
 	manageFirewall = flag.Bool("manage-firewall", false, "open/close UFW rules automatically for "+
 		"dynamically assigned ports (requires a sudoers rule, see README)")
-	advertise = flag.String("advertise", "", "public hostname/IP shown in the suggested client "+
-		"command (cosmetic only — default placeholder <your-vps-ip>)")
+	advertise  = flag.String("advertise", "", "public hostname/IP shown to clients (default: domain or auto-detected public IP)")
 	tunnelCert = flag.String("tunnel-cert", "", "TLS certificate for the tunnel port (enables TLS)")
 	tunnelKey  = flag.String("tunnel-key", "", "TLS private key for the tunnel port")
 	publicCert = flag.String("public-cert", "", "TLS certificate for the public port (enables HTTPS)")
 	publicKey  = flag.String("public-key", "", "TLS private key for the public port")
+	autoHTTPS  = flag.Bool("https", false, "automatic Let's Encrypt HTTPS on :443 (requires --domain; accepts ACME terms)")
+	acmeEmail  = flag.String("email", "", "email for the ACME account")
+	publicURL  = flag.String("public-url", "", "external HTTP(S) origin, e.g. https://tunnels.example.com (for reverse proxies)")
+	certDir    = flag.String("cert-dir", "", "ACME certificate cache (default: ~/.relayd/certs)")
 )
 
-// authMsg / authAck mirror the structs in cmd/relay (kept tiny on purpose).
-type authMsg struct {
-	Name  string `json:"name"`
-	Token string `json:"token"`
-}
+// Authentication and URL announcements are shared with all backends.
+type authMsg = protocol.Auth
 
 // authAckMsg tells the client everything it needs to print a visitor URL.
-type authAckMsg struct {
-	Domain string `json:"domain"` // root domain, empty = none
-	Host   string `json:"host"`   // --advertise value, empty = unknown
-	Port   string `json:"port"`   // mapped public port for this tunnel, no colon
-	Scheme string `json:"scheme"` // "https" only when relay serves HTTPS itself
-}
+type authAckMsg = protocol.AuthAck
 
 // acceptOpts carries what handleTunnel needs beyond the registry.
 type acceptOpts struct {
@@ -66,10 +62,61 @@ type acceptOpts struct {
 	mappedPorts map[string]string // static tunnel name -> ":port"
 	alloc       *portAlloc        // dynamic range allocator (nil = disabled)
 	publicHTTPS bool
+	exclusive   bool
 }
 
 func main() {
 	flag.Parse()
+	if *rootDomain != "" {
+		var err error
+		*rootDomain, err = protocol.NormalizeDomain(*rootDomain)
+		if err != nil {
+			log.Fatal(err)
+		}
+	}
+	if *autoHTTPS {
+		if *rootDomain == "" {
+			log.Fatal("--https requires --domain")
+		}
+		if *publicCert != "" || *publicKey != "" {
+			log.Fatal("use --https or certificate files, not both")
+		}
+		publicSet, tunnelSet := false, false
+		flag.Visit(func(f *flag.Flag) {
+			if f.Name == "public-addr" {
+				publicSet = true
+			}
+			if f.Name == "tunnel-addr" {
+				tunnelSet = true
+			}
+		})
+		if !publicSet {
+			*publicAddr = ":443"
+		}
+		if !tunnelSet {
+			*tunnelAddr = ""
+		}
+		if *publicURL == "" {
+			_, port, err := net.SplitHostPort(*publicAddr)
+			if err != nil {
+				log.Fatal(err)
+			}
+			*publicURL = protocol.VisitorURL("https", *rootDomain, port)
+		}
+	}
+	if *publicURL != "" {
+		u, err := protocol.ServerURL(*publicURL)
+		if err != nil {
+			log.Fatal(err)
+		}
+		if *rootDomain == "" || u.Hostname() != *rootDomain {
+			log.Fatal("--public-url hostname must equal --domain")
+		}
+		*publicURL = u.String()
+	}
+	if *advertise == "" && *rootDomain != "" {
+		*advertise = *rootDomain
+	}
 
 	token, tokenSource := resolveAuthToken()
 	*authToken = token // handleTunnel compares against this
@@ -168,32 +215,34 @@ func main() {
 	// Hint comes after parsing so commands can be complete and runnable.
 	printConnectHint(token, tokenSource, mappedPorts, alloc)
 
-	tunLn, err := net.Listen("tcp", *tunnelAddr)
-	if err != nil {
-		log.Fatal(err)
-	}
-	if *tunnelCert != "" {
-		cert, err := tls.LoadX509KeyPair(*tunnelCert, *tunnelKey)
+	opts := acceptOpts{reg: reg, mappedPorts: mappedPorts, alloc: alloc, publicHTTPS: *publicCert != "" || *autoHTTPS}
+	if *tunnelAddr != "" {
+		tunLn, err := net.Listen("tcp", *tunnelAddr)
 		if err != nil {
 			log.Fatal(err)
 		}
-		tunLn = tls.NewListener(tunLn, &tls.Config{
-			Certificates: []tls.Certificate{cert},
-			NextProtos:   []string{"relay/1"},
-		})
-		log.Print("tunnel door speaks TLS")
+		if *tunnelCert != "" {
+			cert, err := tls.LoadX509KeyPair(*tunnelCert, *tunnelKey)
+			if err != nil {
+				log.Fatal(err)
+			}
+			tunLn = tls.NewListener(tunLn, &tls.Config{
+				Certificates: []tls.Certificate{cert},
+				NextProtos:   []string{protocol.Version},
+			})
+			log.Print("tunnel door speaks TLS")
+		}
+		go acceptTunnels(tunLn, opts)
 	}
-	go acceptTunnels(tunLn, acceptOpts{
-		reg:         reg,
-		mappedPorts: mappedPorts,
-		alloc:       alloc,
-		publicHTTPS: *publicCert != "",
-	})
 
 	srv := &http.Server{
 		Addr:              *publicAddr,
-		Handler:           http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { serveVisitorHTTP(w, r, reg) }),
+		Handler:           serverHandler(opts),
 		ReadHeaderTimeout: 5 * time.Second,
+	}
+	if *autoHTTPS {
+		log.Fatal(serveAutoHTTPS(srv, reg))
+		return
 	}
 	scheme := "HTTP"
 	if *publicCert != "" {
@@ -221,7 +270,9 @@ func acceptTunnels(l net.Listener, opts acceptOpts) {
 }
 
 func handleTunnel(nc net.Conn, opts acceptOpts) {
+	defer nc.Close()
 	wc := wire.New(nc, wire.WithKeepalive(wire.PingInterval, wire.PingTimeout))
+	defer wc.Close()
 
 	// The very first event must be an Auth control frame.
 	var authed authMsg
@@ -244,7 +295,7 @@ func handleTunnel(nc net.Conn, opts acceptOpts) {
 		return
 	}
 
-	if authed.Token != *authToken {
+	if subtle.ConstantTimeCompare([]byte(authed.Token), []byte(*authToken)) != 1 {
 		log.Printf("tunnel %q rejected: bad token", authed.Name)
 		rejectTunnel(wc, "bad token")
 		return
@@ -254,7 +305,21 @@ func handleTunnel(nc net.Conn, opts acceptOpts) {
 		return
 	}
 
-	opts.reg.add(authed.Name, wc)
+	if opts.exclusive {
+		if !opts.reg.addExclusive(authed.Name, wc) {
+			rejectTunnel(wc, "name already connected; choose another --name")
+			return
+		}
+	} else {
+		opts.reg.add(authed.Name, wc)
+	}
+	defer func() {
+		lastReplica := opts.reg.remove(authed.Name, wc)
+		if lastReplica && opts.alloc != nil && opts.mappedPorts[authed.Name] == "" {
+			opts.alloc.Deactivate(authed.Name)
+		}
+		log.Printf("tunnel %q disconnected", authed.Name)
+	}()
 
 	port := strings.TrimPrefix(opts.mappedPorts[authed.Name], ":")
 	if port == "" && opts.alloc != nil {
@@ -276,6 +341,7 @@ func handleTunnel(nc net.Conn, opts acceptOpts) {
 	if opts.publicHTTPS {
 		ack.Scheme = "https"
 	}
+	ack.URL = visitorURL(authed.Name, ack)
 	ackBytes, _ := json.Marshal(ack)
 	if err := wc.Control(wire.AuthAck, ackBytes); err != nil {
 		return
@@ -287,16 +353,6 @@ func handleTunnel(nc net.Conn, opts acceptOpts) {
 		// streams); drain until the connection dies.
 	}
 
-	lastReplica := opts.reg.remove(authed.Name, wc)
-	if lastReplica && opts.alloc != nil && opts.mappedPorts[authed.Name] == "" {
-		// No replica left for a dynamically assigned tunnel: stop its
-		// listener and close its firewall rule. Reconnecting reactivates
-		// everything on the same (persisted) port.
-		opts.alloc.Deactivate(authed.Name)
-		log.Printf("tunnel %q fully offline — port closed until it returns", authed.Name)
-	} else {
-		log.Printf("tunnel %q disconnected", authed.Name)
-	}
 }
 
 func rejectTunnel(wc *wire.Conn, reason string) {
@@ -305,7 +361,7 @@ func rejectTunnel(wc *wire.Conn, reason string) {
 }
 
 func validName(name string) bool {
-	return nameRegexp.MatchString(name)
+	return protocol.ValidName(name)
 }
 
 func parsePortRange(s string) (int, int, error) {
@@ -320,8 +376,6 @@ func parsePortRange(s string) (int, int, error) {
 	}
 	return lo, hi, nil
 }
-
-var nameRegexp = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
 
 // resolveTunnel decides where a visitor request goes: by Host header when it
 // names a live tunnel, otherwise the catch-all --default tunnel (for
@@ -469,6 +523,21 @@ func detectPublicIP() string {
 // tunnel — placeholders only where the operator truly must decide. Tokens
 // passed via --auth-token are not echoed (logs get shipped; secrets shouldn't).
 func printConnectHint(token, source string, mappedPorts map[string]string, alloc *portAlloc) {
+	if *rootDomain != "" {
+		base := serverOrigin()
+		fmt.Printf("\nClient setup:\n\n    relay setup --server %s\n\n", base)
+		if source == "flag" {
+			fmt.Println("Use the token supplied with --auth-token.")
+		} else {
+			if p, err := tokenFilePath(); err == nil && source != "ephemeral" {
+				fmt.Printf("Read the token on this server: cat %s\n", p)
+			} else {
+				fmt.Printf("Token for this run: %s\n", token)
+			}
+		}
+		fmt.Print("Then run: relay 3000\n\n")
+		return
+	}
 	host := *advertise
 	if host == "" {
 		host = "<your-vps-ip>"

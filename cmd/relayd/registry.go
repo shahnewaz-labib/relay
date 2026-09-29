@@ -36,6 +36,35 @@ func (r *registry) add(name string, c *wire.Conn) {
 	e.conns = append(e.conns, c)
 }
 
+// WebSocket clients reserve one name per connection, instead of joining a
+// legacy replica group. The check and reservation must be atomic.
+func (r *registry) addExclusive(name string, c *wire.Conn) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if e := r.m[name]; e != nil {
+		for _, conn := range e.conns {
+			if !conn.Dead() {
+				return false
+			}
+		}
+	}
+	r.m[name] = &entry{conns: []*wire.Conn{c}}
+	return true
+}
+
+func (r *registry) has(name string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if e := r.m[name]; e != nil {
+		for _, c := range e.conns {
+			if !c.Dead() {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (r *registry) remove(name string, c *wire.Conn) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
