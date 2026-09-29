@@ -107,3 +107,19 @@ test("serializes a request with a length and without hop-by-hop headers", () => 
   assert.doesNotMatch(out, /keep-alive/i);
   assert.ok(out.endsWith("\r\n\r\n"));
 });
+
+test("forces identity encoding on the request to the origin", () => {
+  const url = new URL("https://demo.example.com/");
+  const headers = new Headers({ "accept-encoding": "gzip, deflate, br" });
+  const out = text(serializeRequest("GET", url, headers, "demo.example.com", 0));
+  assert.match(out, /\r\nAccept-Encoding: identity\r\n/);
+  assert.doesNotMatch(out, /gzip/i, "the visitor's accept-encoding must not reach the origin");
+});
+
+test("strips Content-Encoding from the response and reports it separately", () => {
+  const head = parseResponseHead(
+    bytes("HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Length: 9\r\n\r\n"),
+  );
+  assert.equal(head.contentEncoding, "gzip");
+  assert.equal(head.headers.get("content-encoding"), null);
+});

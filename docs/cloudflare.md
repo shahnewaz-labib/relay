@@ -120,6 +120,13 @@ state; only the class type matters.
   needs the VPS backend for now.
 - **Streaming request bodies.** The request body is buffered to give the
   origin a `Content-Length`. Bodies over 25 MB get a 413.
+- **Compression on the tunnel leg.** The Worker asks the origin for
+  `Accept-Encoding: identity`. The Workers runtime treats a constructed
+  Response body as already decoded, so forwarding a gzipped body makes the
+  edge re-compress it and overwrite `Content-Encoding`, and the visitor
+  renders raw gzip. Cloudflare still compresses at the edge, so the visitor
+  gets brotli either way; only the laptop-to-edge hop is uncompressed. If an
+  origin gzips regardless, the Worker decodes it with `DecompressionStream`.
 - **Flow control.** Same unbounded-buffer trade-off as the VPS backend.
 - **Sharding.** One Durable Object holds every tunnel. That is simple and
   correct, and it is a single-threaded throughput ceiling. Switch
