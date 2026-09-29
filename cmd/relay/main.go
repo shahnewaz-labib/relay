@@ -394,10 +394,20 @@ func bind(wc *wire.Conn, id uint64) {
 
 	go func() {
 		io.Copy(svc, st) // request bytes → local service
-		// A cancelled visitor or disconnected tunnel must also release a
-		// local origin waiting indefinitely (e.g. an idle WebSocket).
-		svc.Close()
-		st.Close()
+		// The request side is finished. Why this is not a full close: the
+		// origin still owes us a response, and closing svc here truncates it.
+		// Half-close instead, so the origin sees EOF on its read side and can
+		// still reply. If the tunnel itself died there is no response coming,
+		// so tear everything down — that is what releases a local origin
+		// waiting indefinitely, such as an idle WebSocket.
+		if wc.Dead() {
+			svc.Close()
+			st.Close()
+			return
+		}
+		if cw, ok := svc.(interface{ CloseWrite() error }); ok {
+			_ = cw.CloseWrite()
+		}
 	}()
 	io.Copy(st, svc) // response bytes → visitor
 	st.Close()

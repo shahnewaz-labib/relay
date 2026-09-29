@@ -249,8 +249,11 @@ func (c *Conn) readLoop() {
 				s.push(body)
 			} // else: late data for a stream we already closed — ignore
 		case Fin:
+			// The peer will send nothing more on this stream, so it is safe
+			// to forget it now. Dropping it any earlier loses in-flight Data.
 			if s, ok := c.Lookup(id); ok {
 				s.closeRead()
+				c.unregister(id)
 			}
 			c.pushEvent(Event{Type: Fin, ID: id})
 		case Ping:
@@ -361,10 +364,15 @@ func (s *Stream) Write(p []byte) (int, error) {
 }
 
 // Close sends FIN (once) and releases local readers with EOF.
+//
+// It deliberately does NOT unregister the stream. FIN means "I am done
+// sending"; the peer may still have data in flight. Unregistering here made
+// readLoop drop those frames on the floor, which truncated responses whenever
+// a proxied request and its reply overlapped. The stream leaves the map when
+// the peer's own FIN arrives, or when the conn shuts down.
 func (s *Stream) Close() error {
 	if s.finSent.CompareAndSwap(false, true) {
 		_ = s.conn.writeFrame(Fin, s.id, nil)
-		s.conn.unregister(s.id)
 	}
 	s.closeRead()
 	return nil
