@@ -186,9 +186,23 @@ export class TunnelHub {
       return this.reject(ws, "bad token");
     }
     if (!NAME_RE.test(auth.name ?? "")) return this.reject(ws, "invalid tunnel name");
+
+    // The newest authenticated client wins the name.
+    //
+    // A client whose network dropped leaves a socket that still reports OPEN
+    // until the runtime notices — often minutes. Rejecting the reconnect on
+    // that basis stranded the name and killed the tunnel for good, because
+    // the client treats a rejection as fatal. Displacing is also what makes
+    // a redeploy or an object restart recoverable. Holding the token is the
+    // authorisation to hold the name.
+    // The displaced client is told why, with Reject, which the Go client
+    // treats as fatal. That matters: if it simply reconnected it would
+    // displace us straight back, and two live clients would trade the name
+    // forever, dropping in-flight requests on every swap. Rejecting the
+    // loser converges on one owner immediately.
     const existing = this.lookup(auth.name);
     if (existing && existing !== ws) {
-      return this.reject(ws, "name already connected; choose another --name");
+      this.reject(existing, "displaced by a newer connection for this name");
     }
     const origin = ws.deserializeAttachment() ?? {};
     ws.serializeAttachment({ ...origin, name: auth.name });
