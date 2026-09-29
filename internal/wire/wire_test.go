@@ -221,3 +221,63 @@ func TestKeepaliveSurvivesResponsivePeer(t *testing.T) {
 		t.Fatalf("write after pings failed: %v", err)
 	}
 }
+
+// Mirrors the shape the HTTP proxy uses: the opener sends a short request, the
+// peer replies with a large body and closes. If bytes go missing here, the
+// multiplexer lost them and the HTTP layer is innocent.
+func TestLargeResponseAcrossConcurrentStreams(t *testing.T) {
+	const streams, size = 4, 400_000
+	ca, cb := dialPair(t)
+
+	payload := make([]byte, size)
+	if _, err := rand.Read(payload); err != nil {
+		t.Fatal(err)
+	}
+
+	go func() {
+		for ev := range cb.Events() {
+			if ev.Type != Syn {
+				continue
+			}
+			go func(id uint64) {
+				s, ok := cb.Lookup(id)
+				if !ok {
+					return
+				}
+				req := make([]byte, 4)
+				if _, err := io.ReadFull(s, req); err != nil {
+					return
+				}
+				_, _ = s.Write(payload)
+				s.Close()
+			}(ev.ID)
+		}
+	}()
+
+	var wg sync.WaitGroup
+	for i := 0; i < streams; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			s, err := ca.Open()
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			defer s.Close()
+			if _, err := s.Write([]byte("GET ")); err != nil {
+				t.Error(err)
+				return
+			}
+			got, err := io.ReadAll(s)
+			if err != nil {
+				t.Errorf("read: %v", err)
+				return
+			}
+			if !bytes.Equal(got, payload) {
+				t.Errorf("got %d bytes, want %d", len(got), size)
+			}
+		}()
+	}
+	wg.Wait()
+}

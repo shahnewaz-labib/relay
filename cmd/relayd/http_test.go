@@ -93,14 +93,23 @@ func (f *tunnelFixture) connect(t *testing.T, name, origin string) (protocol.Aut
 				continue
 			}
 			go func() {
-				defer st.Close()
 				conn, err := net.DialTimeout("tcp", origin, time.Second)
 				if err != nil {
+					st.Close()
 					return
 				}
-				defer conn.Close()
-				go io.Copy(conn, st)
+				// Mirror cmd/relay's bind: half-close when the request side
+				// ends, so the origin sees EOF but can still reply. A full
+				// close here would truncate the response.
+				go func() {
+					io.Copy(conn, st)
+					if cw, ok := conn.(interface{ CloseWrite() error }); ok {
+						_ = cw.CloseWrite()
+					}
+				}()
 				io.Copy(st, conn)
+				st.Close()
+				conn.Close()
 			}()
 		}
 	}()
