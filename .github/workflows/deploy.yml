@@ -1,0 +1,58 @@
+name: Deploy Worker
+
+# Only the Cloudflare backend deploys from CI. The VPS backend is a binary
+# the operator installs, so it has nothing to push here.
+on:
+  push:
+    branches: [master]
+    paths:
+      - "cloudflare/**"
+      - ".github/workflows/deploy.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # Never let two deploys race; a later push supersedes an in-flight one.
+  group: deploy-worker
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: wrangler deploy
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cloudflare
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: cloudflare/package-lock.json
+
+      - run: npm ci
+
+      # Gate the deploy on the tests, so a red build never reaches production.
+      - run: npm test
+
+      - run: npx wrangler deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+
+      # RELAY_TOKEN is a Worker secret, set once with `wrangler secret put`.
+      # It is NOT managed here: deploys must never rotate it, or every
+      # enrolled client would be locked out.
+      - name: Verify the deployment answers
+        run: |
+          for i in $(seq 1 10); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 \
+              https://relay.tnnnnnnnl.xyz/_relay/check || true)
+            # 401 is the healthy answer here: reachable, and rejecting an
+            # unauthenticated probe. Anything else means the route is broken.
+            if [ "$code" = "401" ]; then echo "healthy (401 on unauthenticated probe)"; exit 0; fi
+            echo "attempt $i: got $code, retrying"; sleep 6
+          done
+          echo "deployment did not become healthy"; exit 1
