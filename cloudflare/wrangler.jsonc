@@ -25,5 +25,13 @@
 
   // One wildcard route covers both the control host and every tunnel.
   // Requires a proxied wildcard DNS record on the zone.
-  "routes": [{ "pattern": "*.tnnnnnnnl.xyz/*", "zone_name": "tnnnnnnnl.xyz" }]
+  "routes": [{ "pattern": "*.tnnnnnnnl.xyz/*", "zone_name": "tnnnnnnnl.xyz" }],
+
+  // Set here, not in the dashboard: CI deploys overwrite dashboard changes.
+  "observability": {
+    "logs": {
+      "enabled": true,
+      "invocation_logs": true
+    }
+  }
 }
