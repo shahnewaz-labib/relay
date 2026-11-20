@@ -49,10 +49,12 @@ jobs:
         run: |
           for i in $(seq 1 10); do
             code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 \
+              -H 'Authorization: Bearer not-the-token' \
               https://relay.tnnnnnnnl.xyz/_relay/check || true)
-            # 401 is the healthy answer here: reachable, and rejecting an
-            # unauthenticated probe. Anything else means the route is broken.
-            if [ "$code" = "401" ]; then echo "healthy (401 on unauthenticated probe)"; exit 0; fi
+            # 401 is the healthy answer here: reachable, and rejecting a wrong
+            # token. A missing token is not used, because anonymous mode
+            # answers 200 to that. Anything else means the route is broken.
+            if [ "$code" = "401" ]; then echo "healthy (401 on a wrong token)"; exit 0; fi
             echo "attempt $i: got $code, retrying"; sleep 6
           done
           echo "deployment did not become healthy"; exit 1
