@@ -3,6 +3,7 @@ package protocol
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"net"
@@ -20,6 +21,9 @@ const (
 type Auth struct {
 	Name  string `json:"name"`
 	Token string `json:"token"`
+	// Key, sent with an empty Token, asks for an anonymous tunnel. The
+	// server ignores Name and derives it with AnonName.
+	Key string `json:"key,omitempty"`
 }
 
 type AuthAck struct {
@@ -53,6 +57,27 @@ func RandomName() (string, error) {
 		return "", err
 	}
 	return "tunnel-" + hex.EncodeToString(b[:]), nil
+}
+
+var anonKeyPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+// NewAnonKey returns a fresh anonymous key: 32 random bytes as lowercase hex.
+func NewAnonKey() (string, error) {
+	var b [32]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b[:]), nil
+}
+
+// AnonName derives an anonymous tunnel's name from its key. Only the key's
+// holder can produce the name, so holding the key is owning the name.
+func AnonName(key string) (string, bool) {
+	if !anonKeyPattern.MatchString(key) {
+		return "", false
+	}
+	sum := sha256.Sum256([]byte(key))
+	return "tunnel-" + hex.EncodeToString(sum[:])[:12], true
 }
 
 // ServerURL accepts a bare hostname or an HTTP(S) origin. Paths are reserved

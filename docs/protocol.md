@@ -48,6 +48,24 @@ name exclusively, and replies with AuthAck. A duplicate live name is rejected.
 The client retains its generated name across reconnects. Closing the
 connection unregisters its names and closes its streams.
 
+### Anonymous tunnels
+
+A server may allow tunnels without a token (the Cloudflare backend does when
+`ANONYMOUS` is `"1"`). The client then omits the `Authorization` header and
+sends Auth with an empty `token` and a `key`:
+
+```json
+{ "name": "", "token": "", "key": "<64 lowercase hex chars>" }
+```
+
+The key is 32 random bytes, chosen once per client run. The server ignores
+`name` and derives it as `"tunnel-"` followed by the first 12 hex characters of
+SHA-256 over the key's ASCII bytes. Only the key holder can produce that name,
+so a reconnect with the same key is the owner. Vector: a key of 64 `0`
+characters gives `tunnel-60e05bd1b195`.
+
+Servers without anonymous support ignore `key` and reject the empty token.
+
 ## HTTP forwarding
 
 For each visitor request, the native server opens a stream and writes an
