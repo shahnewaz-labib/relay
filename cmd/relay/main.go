@@ -43,7 +43,11 @@ var (
 	tlsName    = flag.String("tls-name", "", "server name for TLS verification (default: host part of --relay)")
 	serverURL  = flag.String("server", "", "HTTP(S) Relay server (default: saved by relay setup)")
 	jsonOutput = flag.Bool("json", false, "print connection events as JSON")
+	showVer    = flag.Bool("version", false, "print the version and exit")
 )
+
+// version is set by release builds: -ldflags "-X main.version=v1.2.3".
+var version = "dev"
 
 // anonKey is set when running without a token. It lives for one run, so
 // reconnects keep the same tunnel name.
@@ -68,6 +72,10 @@ func main() {
 		flag.PrintDefaults()
 	}
 	flag.CommandLine.Parse(commandArgs(os.Args[1:]))
+	if *showVer {
+		fmt.Println("relay", version)
+		return
+	}
 	if flag.NArg() > 1 {
 		log.Fatal("usage: relay <port> [flags]")
 	}

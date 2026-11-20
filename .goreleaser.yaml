@@ -1,0 +1,31 @@
+# Release builds of the relay client. A pushed v* tag runs this through
+# .github/workflows/release.yml. Try it locally: goreleaser release --snapshot --clean
+version: 2
+
+builds:
+  - id: relay
+    main: ./cmd/relay
+    binary: relay
+    env: [CGO_ENABLED=0]
+    goos: [darwin, linux, windows]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X main.version={{.Tag}}
+
+archives:
+  - id: relay
+    # No version in the name, so .../releases/latest/download/<name> is a
+    # stable URL. install.sh depends on that.
+    name_template: "relay_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files: [LICENSE, README.md]
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  use: github
