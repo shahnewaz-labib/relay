@@ -21,7 +21,21 @@ import {
   serializeUpgradeRequest,
   websocketKey,
 } from "./protocol.js";
-import { admitAnon, anonLimits, anonName, classifyAuth, expiredReason } from "./anon.js";
+import {
+  CONTINUE_PATH,
+  admitAnon,
+  anonLimits,
+  anonName,
+  authTimeoutReason,
+  classifyAuth,
+  continueAllowed,
+  continueResponse,
+  expiredReason,
+  ipKey,
+  needsWarning,
+  safeRedirect,
+  warningPage,
+} from "./anon.js";
 
 const CONNECT_PATH = "/_relay/connect";
 const CHECK_PATH = "/_relay/check";
@@ -97,7 +111,8 @@ export class TunnelHub {
     server.serializeAttachment({
       scheme: url.protocol.replace(":", ""),
       port: url.port,
-      ip: request.headers.get("cf-connecting-ip") ?? "",
+      ip: ipKey(request.headers.get("cf-connecting-ip") ?? ""),
+      connectedAt: Date.now(),
     });
     return new Response(null, {
       status: 101,
@@ -148,8 +163,10 @@ export class TunnelHub {
     switch (frame.type) {
       case T.Ping: {
         // Keepalives arrive every 10s, so they double as the expiry clock.
-        const att = ws.deserializeAttachment();
-        const expired = att?.anon && expiredReason(att.since, Date.now(), anonLimits(this.env));
+        const att = ws.deserializeAttachment() ?? {};
+        const now = Date.now();
+        const expired =
+          authTimeoutReason(att, now) || (att.anon && expiredReason(att.since, now, anonLimits(this.env)));
         if (expired) return this.reject(ws, expired);
         ws.send(PONG_BYTES);
         return;
@@ -398,6 +415,16 @@ export class TunnelHub {
   async serveVisitor(request, url, host, name) {
     const ws = this.lookup(name);
     if (!ws) return errorPage(404, `No tunnel named "${name}" is connected.`);
+
+    if (ws.deserializeAttachment()?.anon) {
+      if (url.pathname === CONTINUE_PATH) {
+        if (continueAllowed(request, url)) return continueResponse(url);
+        // Warn about where the link was going, so Continue leads there.
+        const target = new URL(safeRedirect(url.searchParams.get("to")), url);
+        return warningPage(target, this.env.TUNNEL_SUFFIX);
+      }
+      if (needsWarning(request)) return warningPage(url, this.env.TUNNEL_SUFFIX);
+    }
 
     if (request.headers.get("upgrade")?.toLowerCase() === "websocket") {
       return this.serveWebSocket(request, url, host, ws);

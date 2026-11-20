@@ -1,7 +1,20 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { admitAnon, anonLimits, anonName, classifyAuth, expiredReason } from "../src/anon.js";
+import {
+  admitAnon,
+  anonLimits,
+  anonName,
+  authTimeoutReason,
+  classifyAuth,
+  continueAllowed,
+  continueResponse,
+  ipKey,
+  expiredReason,
+  needsWarning,
+  safeRedirect,
+  warningPage,
+} from "../src/anon.js";
 
 test("anonName matches the shared vector", async () => {
   assert.equal(await anonName("0".repeat(64)), "tunnel-60e05bd1b195");
@@ -61,4 +74,65 @@ test("expiredReason after maxSeconds", () => {
   assert.equal(expiredReason(0, 7_199_000, l), null);
   assert.equal(expiredReason(0, 7_200_000, l), "tunnel expired after 2h");
   assert.equal(expiredReason(0, 90_000, { ...l, maxSeconds: 90 }), "tunnel expired after 90s");
+});
+
+const req = (method, headers) => new Request("https://t.example/", { method, headers });
+
+test("needsWarning only for browser page loads without the cookie", () => {
+  assert.equal(needsWarning(req("GET", { accept: "text/html,*/*" })), true);
+  assert.equal(needsWarning(req("GET", { accept: "*/*" })), false);
+  assert.equal(needsWarning(req("POST", { accept: "text/html" })), false);
+  assert.equal(needsWarning(req("GET", { accept: "text/html", upgrade: "websocket" })), false);
+  assert.equal(needsWarning(req("GET", { accept: "text/html", cookie: "a=b; relay_ok=1" })), false);
+  assert.equal(needsWarning(req("GET", { accept: "text/html", cookie: "xrelay_ok=1" })), true);
+});
+
+test("safeRedirect keeps same-site paths only", () => {
+  assert.equal(safeRedirect("/x?y=1"), "/x?y=1");
+  for (const bad of ["//evil.com", "/\\evil.com", "https://evil.com", null, "", "/\t/evil.com", "/\t\\evil.com", "/a\nb", "/a\u007fb"]) {
+    assert.equal(safeRedirect(bad), "/", `to=${bad}`);
+  }
+});
+
+test("continueResponse sets the cookie and redirects back", () => {
+  const res = continueResponse(new URL("https://t.x/__relay_continue?to=%2Fa"));
+  assert.equal(res.status, 302);
+  assert.equal(res.headers.get("location"), "/a");
+  const cookie = res.headers.get("set-cookie");
+  assert.match(cookie, /relay_ok=1/);
+  assert.match(cookie, /Max-Age=86400/);
+});
+
+test("warningPage links back to the original path", async () => {
+  const res = warningPage(new URL("https://t.x/docs?q=1"));
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get("cache-control"), "no-store");
+  assert.match(await res.text(), /\/__relay_continue\?to=%2Fdocs%3Fq%3D1/);
+});
+
+test("continueAllowed only from the warning page itself", () => {
+  const url = new URL("https://t.x/__relay_continue?to=%2F");
+  const r = (headers) => new Request(url, { headers });
+  assert.equal(continueAllowed(r({}), url), false, "a direct link");
+  assert.equal(continueAllowed(r({ "sec-fetch-site": "cross-site" }), url), false);
+  assert.equal(continueAllowed(r({ "sec-fetch-site": "same-site" }), url), false, "another tunnel");
+  assert.equal(continueAllowed(r({ "sec-fetch-site": "same-origin" }), url), true);
+  assert.equal(continueAllowed(r({ referer: "https://t.x/docs" }), url), true);
+  assert.equal(continueAllowed(r({ referer: "https://other.t.x/" }), url), false);
+  assert.equal(continueAllowed(r({ referer: "not a url" }), url), false);
+});
+
+test("authTimeoutReason drops sockets that never authenticate", () => {
+  assert.equal(authTimeoutReason({ connectedAt: 0 }, 9_999), null);
+  assert.equal(authTimeoutReason({ connectedAt: 0 }, 10_000), "no auth within 10s");
+  assert.equal(authTimeoutReason({ connectedAt: 0, name: "n" }, 99_999), null);
+  assert.equal(authTimeoutReason({}, 99_999), null, "sockets from before this field existed");
+});
+
+test("ipKey groups an IPv6 /64 and keeps IPv4 as is", () => {
+  assert.equal(ipKey("1.2.3.4"), "1.2.3.4");
+  assert.equal(ipKey("2001:db8:1:2:aaaa::1"), "2001:db8:1:2::/64");
+  assert.equal(ipKey("2001:DB8:1:2::5"), "2001:db8:1:2::/64");
+  assert.equal(ipKey("2001:db8::1"), "2001:db8:0:0::/64");
+  assert.equal(ipKey(""), "");
 });
