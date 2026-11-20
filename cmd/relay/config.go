@@ -173,3 +173,57 @@ func commandArgs(args []string) []string {
 	}
 	return args
 }
+
+// defaultServer is the maintainer's public relay, used until relay setup
+// saves another one.
+const defaultServer = "https://relay.tnnnnnnnl.xyz"
+
+const selfHostDocs = "https://github.com/shahnewaz-labib/relay#readme"
+
+// pickServer chooses the HTTP(S) relay: the flag, then saved config, then the
+// public default. Raw TCP mode (--relay) uses none.
+func pickServer(flagServer string, cfg clientConfig, explicitRelay bool) string {
+	switch {
+	case explicitRelay:
+		return ""
+	case flagServer != "":
+		return flagServer
+	case cfg.Server != "":
+		return cfg.Server
+	}
+	return defaultServer
+}
+
+// anonymousMode reports whether to connect without a token. Anonymous tunnels
+// get a name derived from their key, so a chosen name cannot be honoured.
+func anonymousMode(server, token string, nameSet bool) (bool, error) {
+	if server == "" || token != "" {
+		return false, nil
+	}
+	if nameSet {
+		return false, errors.New("custom names need your own server or a token: " + selfHostDocs)
+	}
+	return true, nil
+}
+
+// pickToken chooses the credential: --token, then RELAY_TOKEN, then the saved
+// one. An env token belongs to the user's own server, so it is never sent to
+// the public default; only an explicit --token is.
+func pickToken(usingDefault bool, flagToken, envToken, savedToken string) string {
+	switch {
+	case flagToken != "":
+		return flagToken
+	case usingDefault:
+		return ""
+	case envToken != "":
+		return envToken
+	}
+	return savedToken
+}
+
+func rejectedCredentialsMessage(anonymous bool) string {
+	if anonymous {
+		return "this server doesn't allow anonymous tunnels: pass --token, or self-host: " + selfHostDocs
+	}
+	return "server rejected credentials; check RELAY_TOKEN or run relay setup again"
+}

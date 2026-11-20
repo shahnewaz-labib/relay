@@ -45,6 +45,10 @@ var (
 	jsonOutput = flag.Bool("json", false, "print connection events as JSON")
 )
 
+// anonKey is set when running without a token. It lives for one run, so
+// reconnects keep the same tunnel name.
+var anonKey string
+
 // Authentication and URL announcements are shared with all backends.
 type authMsg = protocol.Auth
 type authAckMsg = protocol.AuthAck
@@ -60,7 +64,7 @@ func main() {
 		return
 	}
 	flag.Usage = func() {
-		fmt.Fprintln(flag.CommandLine.Output(), "Usage: relay <port> [flags]\n       relay setup --server https://tunnels.example.com\n\nFlags:")
+		fmt.Fprintln(flag.CommandLine.Output(), "Usage: relay <port> [flags]   (uses relay.tnnnnnnnl.xyz unless you run relay setup)\n       relay setup --server https://tunnels.example.com\n\nFlags:")
 		flag.PrintDefaults()
 	}
 	flag.CommandLine.Parse(commandArgs(os.Args[1:]))
@@ -77,10 +81,13 @@ func main() {
 	if *retryWait <= 0 {
 		log.Fatal("--retry-wait must be positive")
 	}
-	explicitRelay := false
+	explicitRelay, nameSet := false, false
 	flag.Visit(func(f *flag.Flag) {
-		if f.Name == "relay" {
+		switch f.Name {
+		case "relay":
 			explicitRelay = true
+		case "name":
+			nameSet = true
 		}
 	})
 	if explicitRelay && *serverURL != "" {
@@ -93,8 +100,10 @@ func main() {
 		if err != nil {
 			log.Fatal("read configuration: ", err)
 		}
-		if *serverURL == "" {
-			*serverURL = cfg.Server
+		// The public default applies to the `relay <port>` form only. The
+		// older flags-only form still means raw TCP to --relay's default.
+		if picked := pickServer(*serverURL, cfg, explicitRelay); flag.NArg() == 1 || picked != defaultServer {
+			*serverURL = picked
 		}
 		// Never send a saved credential to a different explicit server.
 		if *serverURL != "" {
@@ -108,16 +117,22 @@ func main() {
 			}
 		}
 	}
-	if *token == "" {
-		*token = os.Getenv("RELAY_TOKEN")
+	usingDefault := *serverURL == defaultServer && cfg.Server != defaultServer
+	if usingDefault && *token == "" && os.Getenv("RELAY_TOKEN") != "" {
+		log.Printf("not sending RELAY_TOKEN to the public relay %s; run relay setup to use your own server", defaultServer)
 	}
-	if *token == "" {
-		*token = cfg.Token
+	*token = pickToken(usingDefault, *token, os.Getenv("RELAY_TOKEN"), cfg.Token)
+	anonymous, err := anonymousMode(*serverURL, *token, nameSet)
+	if err != nil {
+		log.Fatal(err)
 	}
-	if flag.NArg() == 1 && *serverURL == "" && !explicitRelay {
-		log.Fatal("no server configured: run relay setup --server https://tunnels.example.com")
+	if anonymous {
+		if anonKey, err = protocol.NewAnonKey(); err != nil {
+			log.Fatal(err)
+		}
+		*name, _ = protocol.AnonName(anonKey)
 	}
-	if *token == "" {
+	if *token == "" && !anonymous {
 		log.Fatal("no token: run relay setup, pass --token, or set RELAY_TOKEN")
 	}
 	if *name == "" {
@@ -192,7 +207,7 @@ func runOnce(ctx context.Context, markAuth func()) {
 	wc := wire.New(nc, wire.WithKeepalive(wire.PingInterval, wire.PingTimeout))
 	defer wc.Close()
 
-	auth, _ := json.Marshal(authMsg{Name: *name, Token: *token})
+	auth, _ := json.Marshal(authMsg{Name: *name, Token: *token, Key: anonKey})
 	if err := wc.Control(wire.Auth, auth); err != nil {
 		log.Printf("auth send failed: %v", err)
 		return
@@ -262,6 +277,14 @@ func printVisitorURL(ack authAckMsg) {
 	}
 }
 
+// authHeader carries the token. Anonymous clients send none.
+func authHeader() http.Header {
+	if *token == "" {
+		return nil
+	}
+	return http.Header{"Authorization": {"Bearer " + *token}}
+}
+
 // dialRelay uses WebSocket for server origins, or the legacy TCP/TLS transport.
 func dialRelay(ctx context.Context) (net.Conn, error) {
 	if *serverURL != "" {
@@ -285,12 +308,12 @@ func dialRelay(ctx context.Context) (net.Conn, error) {
 		defer cancel()
 		ws, resp, err := websocket.Dial(dialCtx, u.String(), &websocket.DialOptions{
 			HTTPClient:   &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
-			HTTPHeader:   http.Header{"Authorization": {"Bearer " + *token}},
+			HTTPHeader:   authHeader(),
 			Subprotocols: []string{protocol.Version},
 		})
 		if err != nil {
 			if resp != nil && (resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden) {
-				log.Fatal("server rejected credentials; check RELAY_TOKEN or run relay setup again")
+				log.Fatal(rejectedCredentialsMessage(anonKey != ""))
 			}
 			return nil, err
 		}
