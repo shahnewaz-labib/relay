@@ -72,7 +72,10 @@ export function timingSafeEqual(a, b) {
 // ---- visitor warning page ----
 
 export const CONTINUE_PATH = "/__relay_continue";
-const COOKIE = "relay_ok=1";
+// The __Host- prefix makes browsers refuse this cookie with a Domain
+// attribute, so another tunnel on the same domain cannot set it for this one.
+const COOKIE_NAME = "__Host-relay_ok";
+const COOKIE = `${COOKIE_NAME}=1`;
 
 // Only browser page loads are interrupted. APIs, assets, form posts and
 // WebSockets pass straight through, so the tunnel still works for tools.
@@ -146,4 +149,16 @@ export function ipKey(ip) {
   const right = ip.includes("::") && tail ? tail.split(":") : [];
   const groups = ip.includes("::") ? [...left, ...Array(8 - left.length - right.length).fill("0"), ...right] : left;
   return groups.slice(0, 4).map((g) => g.replace(/^0+(?=.)/, "")).join(":") + "::/64";
+}
+
+// Only the Worker may set the warning cookie. An origin could otherwise set
+// it from a response to a subresource request, which never sees the warning.
+// Browsers match the __Host- prefix case-insensitively, so this does too.
+export function stripRelayCookie(headers) {
+  const cookies = headers.getSetCookie();
+  headers.delete("set-cookie");
+  for (const c of cookies) {
+    const name = c.slice(0, c.indexOf("=")).trim().toLowerCase();
+    if (name !== COOKIE_NAME.toLowerCase()) headers.append("set-cookie", c);
+  }
 }

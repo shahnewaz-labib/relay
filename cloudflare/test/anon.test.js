@@ -13,6 +13,7 @@ import {
   expiredReason,
   needsWarning,
   safeRedirect,
+  stripRelayCookie,
   warningPage,
 } from "../src/anon.js";
 
@@ -83,8 +84,9 @@ test("needsWarning only for browser page loads without the cookie", () => {
   assert.equal(needsWarning(req("GET", { accept: "*/*" })), false);
   assert.equal(needsWarning(req("POST", { accept: "text/html" })), false);
   assert.equal(needsWarning(req("GET", { accept: "text/html", upgrade: "websocket" })), false);
-  assert.equal(needsWarning(req("GET", { accept: "text/html", cookie: "a=b; relay_ok=1" })), false);
-  assert.equal(needsWarning(req("GET", { accept: "text/html", cookie: "xrelay_ok=1" })), true);
+  assert.equal(needsWarning(req("GET", { accept: "text/html", cookie: "a=b; __Host-relay_ok=1" })), false);
+  // The old name could be set for the whole domain by any tunnel.
+  assert.equal(needsWarning(req("GET", { accept: "text/html", cookie: "relay_ok=1" })), true);
 });
 
 test("safeRedirect keeps same-site paths only", () => {
@@ -99,8 +101,11 @@ test("continueResponse sets the cookie and redirects back", () => {
   assert.equal(res.status, 302);
   assert.equal(res.headers.get("location"), "/a");
   const cookie = res.headers.get("set-cookie");
-  assert.match(cookie, /relay_ok=1/);
+  assert.match(cookie, /^__Host-relay_ok=1;/);
   assert.match(cookie, /Max-Age=86400/);
+  assert.match(cookie, /Path=\//);
+  assert.match(cookie, /Secure/);
+  assert.doesNotMatch(cookie, /Domain=/i, "__Host- cookies must be host-only");
 });
 
 test("warningPage links back to the original path", async () => {
@@ -135,4 +140,16 @@ test("ipKey groups an IPv6 /64 and keeps IPv4 as is", () => {
   assert.equal(ipKey("2001:DB8:1:2::5"), "2001:db8:1:2::/64");
   assert.equal(ipKey("2001:db8::1"), "2001:db8:0:0::/64");
   assert.equal(ipKey(""), "");
+});
+
+test("stripRelayCookie removes only the relay cookie from origin responses", () => {
+  const h = new Headers();
+  h.append("set-cookie", "session=abc; Path=/");
+  h.append("set-cookie", "__Host-relay_ok=1; Path=/; Secure");
+  h.append("set-cookie", "__host-RELAY_OK=1; Path=/; Secure");
+  h.append("set-cookie", "theme=dark");
+  h.set("content-type", "text/plain");
+  stripRelayCookie(h);
+  assert.deepEqual(h.getSetCookie(), ["session=abc; Path=/", "theme=dark"]);
+  assert.equal(h.get("content-type"), "text/plain");
 });

@@ -34,6 +34,7 @@ import {
   ipKey,
   needsWarning,
   safeRedirect,
+  stripRelayCookie,
   warningPage,
 } from "./anon.js";
 
@@ -455,6 +456,7 @@ export class TunnelHub {
     const timer = setTimeout(() => pending.fail(new Error("origin timed out")), 30_000);
     try {
       const head = await pending.headReady;
+      if (ws.deserializeAttachment()?.anon) stripRelayCookie(head.headers);
       if (head.status === 204 || head.status === 304) {
         return new Response(null, {
           status: head.status,
