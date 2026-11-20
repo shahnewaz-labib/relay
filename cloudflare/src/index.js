@@ -21,6 +21,7 @@ import {
   serializeUpgradeRequest,
   websocketKey,
 } from "./protocol.js";
+import { admitAnon, anonLimits, anonName, classifyAuth, expiredReason } from "./anon.js";
 
 const CONNECT_PATH = "/_relay/connect";
 const CHECK_PATH = "/_relay/check";
@@ -61,7 +62,8 @@ export class TunnelHub {
         if (request.method !== "GET") {
           return new Response("method not allowed", { status: 405, headers: { allow: "GET" } });
         }
-        if (!this.authorized(request)) return new Response("unauthorized", { status: 401 });
+        const who = classifyAuth({ header: request.headers.get("authorization"), env: this.env });
+        if (who === "reject") return new Response("unauthorized", { status: 401 });
         return url.pathname === CHECK_PATH ? this.check() : this.connect(request, url);
       }
     }
@@ -71,12 +73,6 @@ export class TunnelHub {
     const name = host.slice(0, -suffix.length);
     if (!NAME_RE.test(name)) return errorPage(404, "No tunnel for this hostname.");
     return this.serveVisitor(request, url, host, name);
-  }
-
-  authorized(request) {
-    const expected = `Bearer ${this.env.RELAY_TOKEN}`;
-    const got = request.headers.get("authorization") ?? "";
-    return this.env.RELAY_TOKEN && timingSafeEqual(got, expected);
   }
 
   check() {
@@ -101,6 +97,7 @@ export class TunnelHub {
     server.serializeAttachment({
       scheme: url.protocol.replace(":", ""),
       port: url.port,
+      ip: request.headers.get("cf-connecting-ip") ?? "",
     });
     return new Response(null, {
       status: 101,
@@ -149,13 +146,18 @@ export class TunnelHub {
 
   handleFrame(ws, st, frame) {
     switch (frame.type) {
-      case T.Ping:
+      case T.Ping: {
+        // Keepalives arrive every 10s, so they double as the expiry clock.
+        const att = ws.deserializeAttachment();
+        const expired = att?.anon && expiredReason(att.since, Date.now(), anonLimits(this.env));
+        if (expired) return this.reject(ws, expired);
         ws.send(PONG_BYTES);
         return;
+      }
       case T.Pong:
         return;
       case T.Auth:
-        this.handleAuth(ws, frame);
+        this.handleAuth(ws, frame).catch((err) => this.reject(ws, String(err)));
         return;
       // Frame IDs decode as BigInt; pending streams are keyed by Number.
       // Map treats 1n and 1 as different keys, so normalise on every lookup.
@@ -175,17 +177,32 @@ export class TunnelHub {
     }
   }
 
-  handleAuth(ws, frame) {
+  async handleAuth(ws, frame) {
     let auth;
     try {
       auth = JSON.parse(new TextDecoder().decode(frame.body));
     } catch {
       return this.reject(ws, "malformed auth");
     }
-    if (!this.env.RELAY_TOKEN || !timingSafeEqual(auth.token ?? "", this.env.RELAY_TOKEN)) {
-      return this.reject(ws, "bad token");
+    const who = classifyAuth({ token: auth.token ?? "", key: auth.key, env: this.env });
+    if (who === "reject") return this.reject(ws, "bad token");
+    const origin = ws.deserializeAttachment() ?? {};
+    let name = auth.name ?? "";
+    let anon = {};
+    if (who === "anon") {
+      name = await anonName(auth.key);
+      if (!name) return this.reject(ws, "invalid key");
+      const others = [];
+      for (const other of this.ctx.getWebSockets()) {
+        if (other === ws || other.readyState !== WebSocket.READY_STATE_OPEN) continue;
+        const a = other.deserializeAttachment() ?? {};
+        if (a.name) others.push({ name: a.name, ip: a.ip, anon: !!a.anon });
+      }
+      const refused = admitAnon({ name, ip: origin.ip, others, limits: anonLimits(this.env) });
+      if (refused) return this.reject(ws, refused);
+      anon = { anon: true, since: Date.now() };
     }
-    if (!NAME_RE.test(auth.name ?? "")) return this.reject(ws, "invalid tunnel name");
+    if (!NAME_RE.test(name)) return this.reject(ws, "invalid tunnel name");
 
     // The newest authenticated client wins the name.
     //
@@ -200,14 +217,13 @@ export class TunnelHub {
     // displace us straight back, and two live clients would trade the name
     // forever, dropping in-flight requests on every swap. Rejecting the
     // loser converges on one owner immediately.
-    const existing = this.lookup(auth.name);
+    const existing = this.lookup(name);
     if (existing && existing !== ws) {
       this.reject(existing, "displaced by a newer connection for this name");
     }
-    const origin = ws.deserializeAttachment() ?? {};
-    ws.serializeAttachment({ ...origin, name: auth.name });
+    ws.serializeAttachment({ ...origin, ...anon, name });
     const scheme = origin.scheme === "http" ? "http" : "https";
-    const hostname = `${auth.name}.${this.env.TUNNEL_SUFFIX}`;
+    const hostname = `${name}.${this.env.TUNNEL_SUFFIX}`;
     const authority = origin.port ? `${hostname}:${origin.port}` : hostname;
     const ack = {
       url: `${scheme}://${authority}`,
@@ -631,14 +647,6 @@ function safeError(controller, err) {
   } catch {
     // already closed or cancelled
   }
-}
-
-// Constant-time string compare, so a wrong token leaks no timing signal.
-function timingSafeEqual(a, b) {
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  return diff === 0;
 }
 
 function errorPage(status, message) {
