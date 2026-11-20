@@ -8,6 +8,9 @@
   "name": "relay-dev",
   "main": "src/index.js",
   "compatibility_date": "2026-09-01",
+  // install.sh is imported as a string and served at /install.
+  "rules": [{ "type": "Text", "globs": ["**/*.sh"], "fallthrough": true }],
+
   "durable_objects": {
     "bindings": [{ "name": "HUB", "class_name": "TunnelHub" }]
   },

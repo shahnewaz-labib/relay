@@ -7,6 +7,7 @@ on:
     branches: [master]
     paths:
       - "cloudflare/**"
+      - "install.sh" # the Worker serves it at /install
       - ".github/workflows/deploy.yml"
   workflow_dispatch:
 

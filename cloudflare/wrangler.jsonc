@@ -10,6 +10,9 @@
 
   // SQLite-backed classes are the only kind available on the Workers Free
   // plan. Relay keeps no persistent state, but the class type still matters.
+  // install.sh is imported as a string and served at /install.
+  "rules": [{ "type": "Text", "globs": ["**/*.sh"], "fallthrough": true }],
+
   "durable_objects": {
     "bindings": [{ "name": "HUB", "class_name": "TunnelHub" }]
   },

@@ -37,6 +37,9 @@ import {
   stripRelayCookie,
   warningPage,
 } from "./anon.js";
+import { installResponse } from "./install.js";
+// Bundled as text by the "rules" entry in wrangler.jsonc.
+import INSTALL_SH from "../../install.sh";
 
 const CONNECT_PATH = "/_relay/connect";
 const CHECK_PATH = "/_relay/check";
@@ -49,7 +52,10 @@ const HUB = "hub";
 
 export default {
   async fetch(request, env) {
-    return env.HUB.get(env.HUB.idFromName(HUB)).fetch(request);
+    // Answered here, before the hub, so installs never wake the object.
+    return (
+      installResponse(request, env, INSTALL_SH) ?? env.HUB.get(env.HUB.idFromName(HUB)).fetch(request)
+    );
   },
 };
 
