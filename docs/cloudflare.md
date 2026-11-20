@@ -108,6 +108,24 @@ about 8,600 requests per day doing nothing. Roughly ten permanently connected
 tunnels exhaust the free request budget on keepalives alone. Disconnect tunnels
 you are not using.
 
+## Anonymous tunnels
+
+With `ANONYMOUS` set to `"1"`, anyone can open a tunnel without the token.
+These tunnels get a random name derived from a per-run key, are capped, and
+show browser visitors a one-time warning page. Token clients are unaffected:
+they keep any name and never count against the caps.
+
+| Var | Default | Meaning |
+| --- | --- | --- |
+| `ANONYMOUS` | unset (off) | `"1"` allows tunnels without the token |
+| `ANON_MAX_TUNNELS` | `8` | anonymous tunnels on the whole relay |
+| `ANON_MAX_PER_IP` | `2` | anonymous tunnels per client IP |
+| `ANON_MAX_SECONDS` | `7200` | lifetime of an anonymous tunnel |
+
+The default of 8 fits the free plan: 8 idle tunnels × ~8,600 keepalives is
+about 69,000 requests a day, leaving room for visitors. On the paid plan,
+raise it.
+
 Durable Objects on the free plan must use the SQLite storage backend, which is
 why `wrangler.jsonc` declares `new_sqlite_classes`. Relay stores no persistent
 state; only the class type matters.

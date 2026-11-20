@@ -4,14 +4,15 @@
 
 ```sh
 relay 3000
-# → https://tunnel-9fa21c4b7e03.example.com
+# → https://tunnel-9fa21c4b7e03.tnnnnnnnl.xyz
 ```
 
-A self-hosted alternative to ngrok, on your own domain. The tunnel protocol,
+An open-source alternative to ngrok. Use the hosted relay with no setup, or
+run your own on your own domain. The tunnel protocol,
 the stream multiplexer and the HTTP forwarding are all written here — about
 2,200 lines of Go, plus 1,000 of JavaScript for the Cloudflare backend.
 
-Two backends, same client and same protocol. Pick one:
+To self-host, pick a backend. Same client and same protocol:
 
 | Backend | Needs | Good for |
 | --- | --- | --- |
@@ -20,8 +21,22 @@ Two backends, same client and same protocol. Pick one:
 
 ## Quick start
 
-Set up a server once, following one of the guides above. Then, on your
-machine:
+```sh
+relay 3000
+```
+
+That's it. With no setup, relay uses the hosted relay at
+`relay.tnnnnnnnl.xyz`. It's shared and free, so it has limits:
+
+- random URL, new on every run
+- tunnels end after 2 hours
+- 2 tunnels per IP address, 8 on the whole relay
+- browser visitors see a one-time "this is a tunnel" page
+
+### Your own server
+
+For stable names and no limits, set up a server once with one of the guides
+above. Then:
 
 ```sh
 relay setup --server https://relay.example.com   # once, paste the token
@@ -79,7 +94,8 @@ cd cloudflare && npm ci && npm test   # Worker backend
 
 ## Limitations
 
-- **One shared token.** No per-client tokens, quotas or rate limits.
+- **One shared token** for self-hosted servers. No per-client tokens or
+  quotas. Only anonymous tunnels are rate-limited.
 - **No flow control.** Per-stream receive buffers are unbounded, so a stalled
   consumer grows memory.
 - **No stream deadlines.** A wedged origin ties up a goroutine per request.

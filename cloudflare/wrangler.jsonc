@@ -18,7 +18,10 @@
   // Tunnels must sit ONE level below the zone apex. Universal SSL does not
   // cover deeper wildcards, so "demo.tunnels.example.com" would need paid
   // Advanced Certificate Manager, while "demo.example.com" is free.
+  // ANONYMOUS lets anyone open a rate-limited tunnel without the token
+  // (see docs/cloudflare.md). Self-hosters: remove it to require the token.
   "vars": {
+    "ANONYMOUS": "1",
     "CONTROL_HOST": "relay.tnnnnnnnl.xyz",
     "TUNNEL_SUFFIX": "tnnnnnnnl.xyz"
   },

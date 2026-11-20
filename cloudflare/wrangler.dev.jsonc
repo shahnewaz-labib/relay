@@ -13,6 +13,7 @@
   },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["TunnelHub"] }],
   "vars": {
+    "ANONYMOUS": "1",
     "CONTROL_HOST": "localhost",
     "TUNNEL_SUFFIX": "localhost"
   }
