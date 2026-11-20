@@ -168,12 +168,13 @@ Checked against the real Go client through `wrangler dev`:
 
 ## Continuous deployment
 
-Two workflows in `.github/workflows/`:
+Three workflows in `.github/workflows/`:
 
 | Workflow | Trigger | Does |
 | --- | --- | --- |
 | `ci.yml` | push to master, any PR | gofmt, `go vet`, `go build`, `go test -race`, Worker unit tests, `wrangler deploy --dry-run` |
-| `deploy.yml` | push to master touching `cloudflare/**` | `npm test`, then `wrangler deploy`, then a health probe |
+| `deploy.yml` | push to master touching `cloudflare/**` or `install.sh` | `npm test`, then `wrangler deploy`, then a health probe |
+| `release.yml` | push of a `v*` tag | `go test`, then GoReleaser builds the client and publishes a GitHub release |
 
 ### One-time setup
 

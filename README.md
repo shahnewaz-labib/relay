@@ -19,6 +19,21 @@ To self-host, pick a backend. Same client and same protocol:
 | [**Cloudflare**](docs/cloudflare.md) | a domain on Cloudflare | no server to run; free plan |
 | [**VPS**](docs/vps.md) | a VPS and a domain | full control; no third party |
 
+## Install
+
+```sh
+curl -fsSL https://relay.tnnnnnnnl.xyz/install | sh
+```
+
+The script picks the build for your OS and CPU, checks its checksum, and
+installs to `/usr/local/bin` (or `~/.local/bin`). Pin a version with
+`RELAY_VERSION=v0.1.0`. On Windows, or to skip the script, download an archive
+from [Releases](https://github.com/shahnewaz-labib/relay/releases). With Go:
+
+```sh
+go install github.com/shahnewaz-labib/relay/cmd/relay@latest
+```
+
 ## Quick start
 
 ```sh
@@ -91,6 +106,11 @@ go test ./...
 
 cd cloudflare && npm ci && npm test   # Worker backend
 ```
+
+To release, push a tag: `git tag v0.1.0 && git push origin v0.1.0`.
+GoReleaser builds the client for macOS, Linux and Windows and attaches the
+archives to a GitHub release. Try it locally with
+`goreleaser release --snapshot --clean`.
 
 ## Limitations
 
