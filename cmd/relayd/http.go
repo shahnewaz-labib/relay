@@ -17,7 +17,7 @@ import (
 	"github.com/coder/websocket"
 	"golang.org/x/crypto/acme/autocert"
 
-	"relay/internal/protocol"
+	"github.com/shahnewaz-labib/relay/internal/protocol"
 )
 
 func serverOrigin() string {

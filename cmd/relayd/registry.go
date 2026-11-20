@@ -4,7 +4,7 @@ import (
 	"errors"
 	"sync"
 
-	"relay/internal/wire"
+	"github.com/shahnewaz-labib/relay/internal/wire"
 )
 
 var errTunnelDead = errors.New("tunnel connection is dead")

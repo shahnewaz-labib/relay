@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 
-	"relay/internal/wire"
+	"github.com/shahnewaz-labib/relay/internal/wire"
 )
 
 // beKey carries the chosen backend connection through the request context

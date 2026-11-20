@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"relay/internal/wire"
+	"github.com/shahnewaz-labib/relay/internal/wire"
 )
 
 func TestTunnelDisconnectClosesIdleLocalConnection(t *testing.T) {

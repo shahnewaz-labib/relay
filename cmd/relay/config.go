@@ -17,7 +17,7 @@ import (
 
 	"golang.org/x/term"
 
-	"relay/internal/protocol"
+	"github.com/shahnewaz-labib/relay/internal/protocol"
 )
 
 type clientConfig struct {

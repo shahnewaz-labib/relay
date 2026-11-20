@@ -1,4 +1,4 @@
-module relay
+module github.com/shahnewaz-labib/relay
 
 go 1.22
 

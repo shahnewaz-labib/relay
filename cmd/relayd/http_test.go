@@ -16,8 +16,8 @@ import (
 
 	"github.com/coder/websocket"
 
-	"relay/internal/protocol"
-	"relay/internal/wire"
+	"github.com/shahnewaz-labib/relay/internal/protocol"
+	"github.com/shahnewaz-labib/relay/internal/wire"
 )
 
 type tunnelFixture struct {

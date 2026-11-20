@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"relay/internal/protocol"
+	"github.com/shahnewaz-labib/relay/internal/protocol"
 )
 
 func TestSetupOnlyPersistsVerifiedServer(t *testing.T) {
